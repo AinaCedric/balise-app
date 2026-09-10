@@ -11,6 +11,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   :root{
     --bg:#0A0E16;
@@ -45,6 +47,26 @@
   @media (prefers-reduced-motion: reduce){.radar .sweep{animation:none;}}
   h1{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:28px;letter-spacing:-0.01em;margin:0 0 6px;}
   .sub{color:var(--text-dim);font-size:14.5px;line-height:1.5;max-width:320px;}
+
+  #map{
+    width:100%;height:260px;border-radius:14px;border:1px solid var(--line);
+    margin-bottom:16px;background:var(--panel);
+  }
+  .leaflet-container{background:var(--panel) !important;font-family:'Inter',sans-serif;}
+  .leaflet-popup-content-wrapper{
+    background:var(--panel-2) !important;color:var(--text) !important;
+    border:1px solid var(--line);border-radius:10px !important;
+  }
+  .leaflet-popup-tip{background:var(--panel-2) !important;}
+  .leaflet-popup-content{margin:10px 12px !important;font-size:12.5px;line-height:1.5;}
+  .leaflet-popup-content b{font-family:'Space Grotesk',sans-serif;font-size:13.5px;}
+  .leaflet-popup-content a{color:var(--accent);}
+  .leaflet-control-zoom a{
+    background:var(--panel-2) !important;color:var(--text) !important;border-color:var(--line) !important;
+  }
+  .map-pin{width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid #06261C;box-shadow:0 0 0 5px var(--accent-dim);}
+  .map-pin.me{background:#FFFFFF;border-color:var(--accent);box-shadow:0 0 0 5px rgba(255,255,255,0.18);}
+
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px;}
   .panel h2{font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:600;margin:0 0 4px;}
   .panel .hint{color:var(--text-dim);font-size:13px;margin:0 0 16px;line-height:1.5;}
@@ -136,6 +158,8 @@
     <p class="sub">Ajoute un email, partage ta position, et retrouve tout le monde sur un même écran.</p>
   </div>
 
+  <div id="map"></div>
+
   <div class="panel">
     <h2>Mon compte</h2>
     <p class="hint">Ta position n'est envoyée que si tu appuies sur le bouton — ou si le partage automatique est activé.</p>
@@ -210,6 +234,56 @@ const myLocEl = document.getElementById('my-loc');
 let autoInterval = null;
 let locating = false;
 
+/* ---- carte ---- */
+const ANTANANARIVO = [-18.8792, 47.5079];
+const map = L.map('map', { zoomControl: true, attributionControl: false }).setView(ANTANANARIVO, 12);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 19,
+  subdomains: 'abcd'
+}).addTo(map);
+L.control.attribution({ prefix: false }).addAttribution('© OpenStreetMap, © CARTO').addTo(map);
+
+const peopleMarkers = {};
+let meMarker = null;
+let hasFitOnce = false;
+
+function pinIcon(isMe){
+  return L.divIcon({ className: '', html: `<div class="map-pin${isMe ? ' me' : ''}"></div>`, iconSize: [14,14] });
+}
+function updateMapMarkers(docs){
+  const seen = new Set();
+  docs.forEach((loc) => {
+    seen.add(loc.email);
+    const latlng = [loc.lat, loc.lng];
+    if (peopleMarkers[loc.email]){
+      peopleMarkers[loc.email].setLatLng(latlng);
+    } else {
+      peopleMarkers[loc.email] = L.marker(latlng, { icon: pinIcon(false) }).addTo(map);
+    }
+    peopleMarkers[loc.email].bindPopup(`<b>${escapeHtml(loc.email)}</b><br>${timeAgo(loc.timestamp)}<br><a href="https://www.google.com/maps?q=${loc.lat},${loc.lng}" target="_blank" rel="noopener">Ouvrir dans Maps</a>`);
+  });
+  Object.keys(peopleMarkers).forEach((email) => {
+    if (!seen.has(email)){ map.removeLayer(peopleMarkers[email]); delete peopleMarkers[email]; }
+  });
+  fitMapToMarkers();
+}
+function setMeMarker(lat, lng){
+  const latlng = [lat, lng];
+  if (meMarker) meMarker.setLatLng(latlng);
+  else meMarker = L.marker(latlng, { icon: pinIcon(true) }).addTo(map).bindPopup('<b>Toi</b>');
+  fitMapToMarkers();
+}
+function fitMapToMarkers(){
+  const all = Object.values(peopleMarkers).map((m) => m.getLatLng()).concat(meMarker ? [meMarker.getLatLng()] : []);
+  if (all.length === 0) return;
+  if (all.length === 1){
+    map.setView(all[0], Math.max(map.getZoom(), 14));
+  } else if (!hasFitOnce) {
+    map.fitBounds(L.latLngBounds(all), { padding: [30, 30] });
+  }
+  hasFitOnce = true;
+}
+
 function showMsg(text, type){ msgEl.textContent = text; msgEl.className = 'msg show ' + type; }
 function clearMsg(){ msgEl.className = 'msg'; }
 function isValidEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
@@ -251,6 +325,7 @@ function autoLocate(){
     (pos) => {
       const lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy;
       myLocEl.innerHTML = `<span class="spot"></span> Tu es à ${lat.toFixed(4)}, ${lng.toFixed(4)} (± ${Math.round(acc)} m)`;
+      setMeMarker(lat, lng);
       clearMsg();
       locating = false;
     },
@@ -325,6 +400,7 @@ function removePerson(email){
 window.removePerson = removePerson;
 
 function renderList(docs){
+  updateMapMarkers(docs);
   countEl.textContent = docs.length;
   if (docs.length === 0){
     listEl.innerHTML = `<div class="empty">Personne n'est suivi pour l'instant.<br>Ajoute ton email ci-dessus pour commencer.</div>`;
@@ -373,6 +449,8 @@ autoToggle.addEventListener('change', () => {
 });
 
 (function init(){
+  setTimeout(() => map.invalidateSize(), 300);
+  window.addEventListener('resize', () => map.invalidateSize());
   const saved = localStorage.getItem('balise-my-email');
   if (saved){ emailInput.value = saved; autoLocate(); }
   if (db){
