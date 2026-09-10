@@ -163,7 +163,7 @@
 
   <div class="panel">
     <h2>Mon compte</h2>
-    <p class="hint">Ta position n'est envoyée que si tu appuies sur le bouton — ou si le partage automatique est activé.</p>
+    <p class="hint">Tape un email pour voir sa dernière position connue. Pour partager <b>la tienne</b>, appuie sur le bouton ci-dessous.</p>
     <label for="email-input">Adresse email</label>
     <input type="email" id="email-input" placeholder="toi@exemple.com" autocomplete="email">
     <div class="my-loc" id="my-loc"></div>
@@ -335,34 +335,26 @@ function escapeHtml(str){
 function autoLocate(){
   const email = emailInput.value.trim();
   if (!isValidEmail(email)) return;
-  if (!navigator.geolocation){
-    myLocEl.classList.remove('show');
-    showMsg("La géolocalisation n'est pas disponible sur cet appareil.", 'err');
-    return;
-  }
-  if (locating) return;
-  locating = true;
+  if (!db){ myLocEl.classList.remove('show'); return; }
   myLocEl.classList.add('show');
-  myLocEl.innerHTML = `<span class="spot"></span> Repérage en cours…`;
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      const lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy;
-      myLocEl.innerHTML = `<span class="spot"></span> Tu es à ${lat.toFixed(4)}, ${lng.toFixed(4)} (± ${Math.round(acc)} m)`;
-      setMeMarker(lat, lng);
-      clearMsg();
-      locating = false;
-    },
-    (err) => {
-      let text = "Impossible d'obtenir ta position.";
-      if (err.code === 1) text = "Accès à la position refusé. Autorise la géolocalisation pour ce site dans les réglages du navigateur.";
-      else if (err.code === 2) text = "Position indisponible pour le moment.";
-      else if (err.code === 3) text = "La demande de position a expiré. Réessaie.";
-      myLocEl.classList.remove('show');
-      showMsg(text, 'err');
-      locating = false;
-    },
-    { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 }
-  );
+  myLocEl.innerHTML = `<span class="spot"></span> Recherche de cet email…`;
+  db.collection(COLLECTION).where('email', '==', email).get()
+    .then((snapshot) => {
+      if (snapshot.empty){
+        myLocEl.innerHTML = `<span class="spot"></span> Aucune position partagée pour cet email pour l'instant. Appuie sur « Partager ma position » pour envoyer la tienne.`;
+        return;
+      }
+      const results = snapshot.docs.map((d) => d.data());
+      results.sort((a, b) => b.timestamp - a.timestamp);
+      const bounds = L.latLngBounds(results.map((r) => [r.lat, r.lng]));
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+      myLocEl.innerHTML = results.map((r) =>
+        `<span class="spot"></span> ${escapeHtml(r.deviceLabel || 'Appareil')} — ${r.lat.toFixed(4)}, ${r.lng.toFixed(4)} (${timeAgo(r.timestamp)})`
+      ).join('<br>');
+    })
+    .catch(() => {
+      myLocEl.innerHTML = `<span class="spot"></span> Recherche impossible pour le moment.`;
+    });
 }
 
 function shareLocation(silent){
@@ -391,6 +383,7 @@ function shareLocation(silent){
       db.collection(COLLECTION).doc(docKey(email, getDeviceId())).set(data)
         .then(() => {
           localStorage.setItem('balise-my-email', email);
+          setMeMarker(data.lat, data.lng);
           if (!silent) showMsg('Position partagée.', 'ok');
         })
         .catch(() => { if (!silent) showMsg("Impossible d'enregistrer la position. Réessaie.", 'err'); })
