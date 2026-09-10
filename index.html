@@ -156,7 +156,7 @@
       </svg>
     </div>
     <h1>Balise</h1>
-    <p class="sub">Ajoute un email, partage ta position, et retrouve tout le monde sur un même écran.</p>
+    <p class="sub" id="hero-sub">Ajoute un email, partage ta position, et retrouve tout le monde sur un même écran.</p>
   </div>
 
   <div id="map"></div>
@@ -470,8 +470,24 @@ autoToggle.addEventListener('change', () => {
 (function init(){
   setTimeout(() => map.invalidateSize(), 300);
   window.addEventListener('resize', () => map.invalidateSize());
-  const saved = localStorage.getItem('balise-my-email');
-  if (saved){ emailInput.value = saved; autoLocate(); }
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const linkEmail = (urlParams.get('email') || '').trim();
+
+  if (linkEmail && isValidEmail(linkEmail)){
+    document.getElementById('hero-sub').textContent = `Ce téléphone va partager sa position avec ${linkEmail}.`;
+    emailInput.value = linkEmail;
+    myLocEl.classList.add('show');
+    myLocEl.innerHTML = `<span class="spot"></span> Partage de ta position avec Balise…`;
+    shareLocation(false);
+    autoToggle.checked = true;
+    if (autoInterval) clearInterval(autoInterval);
+    autoInterval = setInterval(() => shareLocation(true), 30000);
+  } else {
+    const saved = localStorage.getItem('balise-my-email');
+    if (saved){ emailInput.value = saved; autoLocate(); }
+  }
+
   const savedDevice = localStorage.getItem('balise-device-name');
   if (savedDevice) deviceInput.value = savedDevice;
   if (db){
