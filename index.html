@@ -71,13 +71,13 @@
   .panel h2{font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:600;margin:0 0 4px;}
   .panel .hint{color:var(--text-dim);font-size:13px;margin:0 0 16px;line-height:1.5;}
   label{display:block;font-size:13px;color:var(--text-dim);margin-bottom:6px;}
-  input[type=email]{
+  input[type=email], input[type=text]{
     width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
     font-family:'Inter',sans-serif;font-size:15px;padding:11px 13px;border-radius:9px;outline:none;
     transition:border-color .15s ease;
   }
-  input[type=email]:focus{border-color:var(--accent);}
-  input[type=email]::placeholder{color:var(--text-faint);}
+  input[type=email]:focus, input[type=text]:focus{border-color:var(--accent);}
+  input[type=email]::placeholder, input[type=text]::placeholder{color:var(--text-faint);}
   .my-loc{
     display:none;align-items:center;gap:8px;font-family:'JetBrains Mono',monospace;font-size:12.5px;
     color:var(--accent);background:var(--accent-dim);border-radius:8px;padding:9px 11px;margin-top:10px;
@@ -117,6 +117,7 @@
   .dot.recent{background:var(--amber);box-shadow:0 0 0 4px var(--amber-dim);}
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.55;}}
   .person-email{font-size:14.5px;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .device-tag{color:var(--text-faint);font-weight:400;font-size:12.5px;}
   .person-time{font-size:12px;color:var(--text-faint);flex-shrink:0;}
   .person-bottom{display:flex;align-items:center;justify-content:space-between;margin-top:9px;padding-top:9px;border-top:1px solid var(--line);}
   .coords{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--text-dim);}
@@ -166,6 +167,8 @@
     <label for="email-input">Adresse email</label>
     <input type="email" id="email-input" placeholder="toi@exemple.com" autocomplete="email">
     <div class="my-loc" id="my-loc"></div>
+    <label for="device-input" style="margin-top:12px;">Nom de cet appareil (optionnel)</label>
+    <input type="text" id="device-input" placeholder="ex : Mon téléphone" maxlength="30" autocomplete="off">
     <div class="row">
       <button class="btn-primary" id="share-btn">Partager ma position</button>
       <button class="btn-ghost" id="reset-btn" title="Retirer mon email de la liste">Retirer</button>
@@ -223,6 +226,7 @@ try{
 const COLLECTION = 'balise-locations';
 
 const emailInput = document.getElementById('email-input');
+const deviceInput = document.getElementById('device-input');
 const shareBtn = document.getElementById('share-btn');
 const resetBtn = document.getElementById('reset-btn');
 const autoToggle = document.getElementById('auto-toggle');
@@ -253,17 +257,18 @@ function pinIcon(isMe){
 function updateMapMarkers(docs){
   const seen = new Set();
   docs.forEach((loc) => {
-    seen.add(loc.email);
+    const key = loc.id;
+    seen.add(key);
     const latlng = [loc.lat, loc.lng];
-    if (peopleMarkers[loc.email]){
-      peopleMarkers[loc.email].setLatLng(latlng);
+    if (peopleMarkers[key]){
+      peopleMarkers[key].setLatLng(latlng);
     } else {
-      peopleMarkers[loc.email] = L.marker(latlng, { icon: pinIcon(false) }).addTo(map);
+      peopleMarkers[key] = L.marker(latlng, { icon: pinIcon(false) }).addTo(map);
     }
-    peopleMarkers[loc.email].bindPopup(`<b>${escapeHtml(loc.email)}</b><br>${timeAgo(loc.timestamp)}<br><a href="https://www.google.com/maps?q=${loc.lat},${loc.lng}" target="_blank" rel="noopener">Ouvrir dans Maps</a>`);
+    peopleMarkers[key].bindPopup(`<b>${escapeHtml(loc.email)}</b><br>${escapeHtml(loc.deviceLabel || 'Appareil')}<br>${timeAgo(loc.timestamp)}<br><a href="https://www.google.com/maps?q=${loc.lat},${loc.lng}" target="_blank" rel="noopener">Ouvrir dans Maps</a>`);
   });
-  Object.keys(peopleMarkers).forEach((email) => {
-    if (!seen.has(email)){ map.removeLayer(peopleMarkers[email]); delete peopleMarkers[email]; }
+  Object.keys(peopleMarkers).forEach((key) => {
+    if (!seen.has(key)){ map.removeLayer(peopleMarkers[key]); delete peopleMarkers[key]; }
   });
   fitMapToMarkers();
 }
@@ -288,6 +293,24 @@ function showMsg(text, type){ msgEl.textContent = text; msgEl.className = 'msg s
 function clearMsg(){ msgEl.className = 'msg'; }
 function isValidEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); }
 function docId(email){ return email.trim().toLowerCase().replace(/[.#$/\[\]]/g, '_'); }
+function getDeviceId(){
+  let id = localStorage.getItem('balise-device-id');
+  if (!id){
+    id = (crypto.randomUUID ? crypto.randomUUID() : 'dev-' + Math.random().toString(36).slice(2)).slice(0, 8);
+    localStorage.setItem('balise-device-id', id);
+  }
+  return id;
+}
+function getDeviceLabel(){
+  const custom = (deviceInput.value || '').trim();
+  if (custom) return custom;
+  const ua = navigator.userAgent;
+  let base = 'Ordinateur';
+  if (/Android/i.test(ua)) base = 'Android';
+  else if (/iPhone|iPad|iPod/i.test(ua)) base = 'iPhone/iPad';
+  return `${base} · ${getDeviceId().slice(0, 4)}`;
+}
+function docKey(email, deviceId){ return docId(email) + '__' + deviceId; }
 function timeAgo(ts){
   const diff = Math.max(0, Date.now() - ts);
   const min = Math.floor(diff / 60000);
@@ -358,12 +381,14 @@ function shareLocation(silent){
     (pos) => {
       const data = {
         email,
+        deviceId: getDeviceId(),
+        deviceLabel: getDeviceLabel(),
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
         accuracy: pos.coords.accuracy,
         timestamp: Date.now()
       };
-      db.collection(COLLECTION).doc(docId(email)).set(data)
+      db.collection(COLLECTION).doc(docKey(email, getDeviceId())).set(data)
         .then(() => {
           localStorage.setItem('balise-my-email', email);
           if (!silent) showMsg('Position partagée.', 'ok');
@@ -389,13 +414,13 @@ function removeMe(){
   if (!db) return;
   const email = emailInput.value.trim();
   if (!isValidEmail(email)){ showMsg('Entre ton email pour te retirer de la liste.', 'err'); return; }
-  db.collection(COLLECTION).doc(docId(email)).delete()
-    .then(() => showMsg('Retiré de la liste des personnes suivies.', 'ok'))
+  db.collection(COLLECTION).doc(docKey(email, getDeviceId())).delete()
+    .then(() => showMsg('Cet appareil a été retiré de la liste.', 'ok'))
     .catch(() => showMsg("Impossible de te retirer pour l'instant.", 'err'));
 }
-function removePerson(email){
+function removePerson(key){
   if (!db) return;
-  db.collection(COLLECTION).doc(docId(email)).delete();
+  db.collection(COLLECTION).doc(key).delete();
 }
 window.removePerson = removePerson;
 
@@ -415,14 +440,14 @@ function renderList(docs){
       <div class="person">
         <div class="person-top">
           <span class="dot ${dotClass}"></span>
-          <span class="person-email">${escapeHtml(loc.email)}</span>
+          <span class="person-email">${escapeHtml(loc.email)} <span class="device-tag">· ${escapeHtml(loc.deviceLabel || 'Appareil')}</span></span>
           <span class="person-time">${timeAgo(loc.timestamp)}</span>
         </div>
         <div class="person-bottom">
           <span class="coords">${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}</span>
           <div class="person-actions">
             <a class="link" href="${mapUrl}" target="_blank" rel="noopener">Ouvrir la carte</a>
-            <button class="link-remove" onclick="removePerson('${escapeHtml(loc.email)}')">Retirer</button>
+            <button class="link-remove" onclick="removePerson('${escapeHtml(loc.id)}')">Retirer</button>
           </div>
         </div>
       </div>`;
@@ -431,6 +456,7 @@ function renderList(docs){
 
 emailInput.addEventListener('blur', autoLocate);
 emailInput.addEventListener('keydown', (e) => { if (e.key === 'Enter'){ e.preventDefault(); autoLocate(); } });
+deviceInput.addEventListener('change', () => localStorage.setItem('balise-device-name', deviceInput.value.trim()));
 shareBtn.addEventListener('click', () => shareLocation(false));
 resetBtn.addEventListener('click', removeMe);
 autoToggle.addEventListener('change', () => {
@@ -453,9 +479,11 @@ autoToggle.addEventListener('change', () => {
   window.addEventListener('resize', () => map.invalidateSize());
   const saved = localStorage.getItem('balise-my-email');
   if (saved){ emailInput.value = saved; autoLocate(); }
+  const savedDevice = localStorage.getItem('balise-device-name');
+  if (savedDevice) deviceInput.value = savedDevice;
   if (db){
     db.collection(COLLECTION).onSnapshot((snapshot) => {
-      const docs = snapshot.docs.map((d) => d.data());
+      const docs = snapshot.docs.map((d) => ({ ...d.data(), id: d.id }));
       renderList(docs);
     }, () => showMsg('Connexion au serveur impossible.', 'err'));
   } else {
